@@ -1,0 +1,12 @@
+# Node dependencies
+node_modules/
+
+# Server logs
+server/logs/
+
+# macOS system files
+.DS_Store
+
+# Editor directories
+.vscode/
+.idea/

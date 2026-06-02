@@ -1,0 +1,13 @@
+{
+  "name": "hive-streaming-telemetry",
+  "version": "1.0.0",
+  "description": "HLS.js video telemetry collection system — captures playback, network, QoE, and error events and sends them to a backend API.",
+  "main": "server/server.js",
+  "scripts": {
+    "start": "node server/server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.6",
+    "express": "^5.2.1"
+  }
+}

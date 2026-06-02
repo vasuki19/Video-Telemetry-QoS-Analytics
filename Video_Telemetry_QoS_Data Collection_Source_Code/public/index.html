@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Hive Streaming Telemetry Test</title>
+    <!-- Load the hls.js player -->
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+    <script src="telemetry/schemas/quality-distribution-schema.js"></script>
+    <script src="telemetry/schemas/identities-schema.js"></script>
+    <script src="telemetry/schemas/content-schema.js"></script>
+    <script src="telemetry/schemas/environment-schema.js"></script>
+    <script src="telemetry/schemas/network-schema.js"></script>
+    <script src="telemetry/schemas/player-state-schema.js"></script>
+    <script src="telemetry/schemas/playback-quality-metrics-schema.js"></script>
+    <script src="telemetry/schemas/telemetry-event-schema.js"></script>
+    <script src="telemetry-client.js"></script>
+</head>
+<body style="background: #1e1e1e; color: #fff; font-family: sans-serif; text-align: center; padding-top: 50px;">
+
+    <h1>Hive Streaming Player Test</h1>
+    
+    <!-- The video player -->
+    <video id="video" controls width="640" height="360" style="background: #000; border: 2px solid #333;"></video>
+
+    <script>
+        var video = document.getElementById('video');
+        const src = "https://streaming-simulator-prod.hivestreaming.com/generic/live/beta-big-bunny-multi/manifest.m3u8";
+        if (typeof Hls === 'undefined') {
+            console.error('HLS.js failed to load.');
+        } else {
+            var hls = new Hls();
+
+            // Demo HLS video stream
+            hls.loadSource(src);
+            hls.attachMedia(video);
+
+            hls.on(Hls.Events.MANIFEST_PARSED, function() {
+                video.play();
+
+                // Start telemetry and send it to the local Node server
+                const tracker = new AdvancedVideoTelemetry(hls, video, {
+                    tenantId: "hive_local_dev",
+                    userId: "developer_01",
+                    endpoint: "http://localhost:8080/api/telemetry",
+                    batchIntervalMs: 10000 // Send every 10 seconds
+                });
+            });
+        }
+    </script>
+</body>
+</html>

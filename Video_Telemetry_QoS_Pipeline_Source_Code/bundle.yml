@@ -1,0 +1,254 @@
+# Databricks Asset Bundle Configuration
+# For automated deployment of Video Telemetry QoS Analytics Pipeline
+# Deploy with: databricks bundle deploy -t <target>
+# Run with: databricks bundle run <resource_name> -t <target>
+
+bundle:
+  name: video_qos_pipeline
+
+include:
+  - resources/*.yml
+
+# Workspace configuration
+workspace:
+  host: https://dbc-a1e55473-3f27.cloud.databricks.com
+
+# Define deployment targets (dev, staging, prod)
+targets:
+  # Development environment
+  dev:
+    mode: development
+    default: true
+    workspace:
+      root_path: ~/.bundle/${bundle.name}/${bundle.target}
+    variables:
+      catalog: workspace
+      schema: hive_video_analytics_dev
+      pipeline_name: video_telemetry_qos_pipeline_dev
+  
+  # Staging environment
+  staging:
+    mode: production
+    workspace:
+      root_path: ~/.bundle/${bundle.name}/${bundle.target}
+    variables:
+      catalog: workspace
+      schema: hive_video_analytics_staging
+      pipeline_name: video_telemetry_qos_pipeline_staging
+  
+  # Production environment
+  prod:
+    mode: production
+    workspace:
+      root_path: ~/.bundle/${bundle.name}/${bundle.target}
+    variables:
+      catalog: workspace
+      schema: hive_video_analytics
+      pipeline_name: video_telemetry_qos_pipeline
+    # Require explicit approval for production deployments
+    run_as:
+      service_principal_name: "${var.prod_service_principal}"
+
+# Pipeline resource definition
+resources:
+  pipelines:
+    video_qos_pipeline:
+      name: ${var.pipeline_name}
+      
+      # Pipeline configuration
+      target: ${var.catalog}.${var.schema}
+      storage: dbfs:/pipelines/${var.pipeline_name}
+      
+      # Compute configuration
+      serverless: true
+      photon: true
+      continuous: false
+      
+      # Development vs Production settings
+      development: ${bundle.target == 'dev'}
+      
+      # Channel: current for latest features, preview for experimental
+      channel: current
+      
+      # Edition: advanced for full features, core for basic
+      edition: advanced
+      
+      # Libraries (transformation notebooks)
+      libraries:
+        # Bronze layer
+        - notebook:
+            path: ./transformations/bronze/bronze_telemetry_raw.py
+        
+        # Silver layer
+        - notebook:
+            path: ./transformations/silver/silver_telemetry_enriched.py
+        - notebook:
+            path: ./transformations/silver/silver_telemetry_quarantine.py
+        
+        # Gold layer
+        - notebook:
+            path: ./transformations/gold/gold_viewer_qos_metrics.py
+      
+      # Pipeline configuration
+      configuration:
+        # Enable liquid clustering
+        pipelines.enableLiquidClustering: true
+        
+        # Optimize write and auto-compact
+        spark.databricks.delta.optimizeWrite.enabled: true
+        spark.databricks.delta.autoCompact.enabled: true
+        
+        # Catalog and schema
+        catalog: ${var.catalog}
+        schema: ${var.schema}
+      
+      # Notifications (optional - configure after deployment)
+      # notifications:
+      #   - email_recipients:
+      #       - vasuambi@gmail.com
+      #     alerts:
+      #       - on-update-failure
+      #       - on-update-fatal-failure
+      #       - on-flow-failure
+
+  # Job definitions for automation
+  jobs:
+    # Daily pipeline run job
+    daily_pipeline_run:
+      name: "${var.pipeline_name}_daily_run"
+      
+      schedule:
+        quartz_cron_expression: "0 0 2 * * ?"  # 2 AM UTC daily
+        timezone_id: UTC
+        pause_status: UNPAUSED
+      
+      tasks:
+        - task_key: run_pipeline
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.video_qos_pipeline.id}
+            full_refresh: false  # Incremental refresh
+      
+      # Email notifications on failure
+      email_notifications:
+        on_failure:
+          - vasuambi@gmail.com
+      
+      max_concurrent_runs: 1
+      timeout_seconds: 7200  # 2 hours
+    
+    # Weekly testing job
+    weekly_pipeline_tests:
+      name: "${var.pipeline_name}_weekly_tests"
+      
+      schedule:
+        quartz_cron_expression: "0 0 4 ? * SUN"  # 4 AM UTC Sundays
+        timezone_id: UTC
+        pause_status: UNPAUSED
+      
+      tasks:
+        - task_key: run_tests
+          notebook_task:
+            notebook_path: ./operations/Pipeline_Testing_Suite
+            base_parameters:
+              pipeline_id: ${resources.pipelines.video_qos_pipeline.id}
+          
+          # Use serverless compute for testing
+          job_cluster_key: test_cluster
+      
+      job_clusters:
+        - job_cluster_key: test_cluster
+          new_cluster:
+            spark_version: 13.3.x-scala2.12
+            node_type_id: i3.xlarge
+            num_workers: 1
+            spark_conf:
+              spark.databricks.cluster.profile: serverless
+      
+      email_notifications:
+        on_failure:
+          - vasuambi@gmail.com
+      
+      max_concurrent_runs: 1
+      timeout_seconds: 3600  # 1 hour
+    
+    # Monthly data retention cleanup
+    monthly_retention_cleanup:
+      name: "${var.pipeline_name}_monthly_cleanup"
+      
+      schedule:
+        quartz_cron_expression: "0 0 3 1 * ?"  # 3 AM UTC on 1st of month
+        timezone_id: UTC
+        pause_status: UNPAUSED
+      
+      tasks:
+        - task_key: cleanup_bronze
+          notebook_task:
+            notebook_path: ./operations/Data_Retention_Management
+            base_parameters:
+              layer: bronze
+              retention_days: "90"
+          job_cluster_key: cleanup_cluster
+        
+        - task_key: cleanup_silver
+          depends_on:
+            - task_key: cleanup_bronze
+          notebook_task:
+            notebook_path: ./operations/Data_Retention_Management
+            base_parameters:
+              layer: silver
+              retention_days: "90"
+          job_cluster_key: cleanup_cluster
+        
+        - task_key: cleanup_quarantine
+          depends_on:
+            - task_key: cleanup_silver
+          notebook_task:
+            notebook_path: ./operations/Data_Retention_Management
+            base_parameters:
+              layer: quarantine
+              retention_days: "180"
+          job_cluster_key: cleanup_cluster
+        
+        - task_key: cleanup_gold
+          depends_on:
+            - task_key: cleanup_quarantine
+          notebook_task:
+            notebook_path: ./operations/Data_Retention_Management
+            base_parameters:
+              layer: gold
+              retention_days: "365"
+          job_cluster_key: cleanup_cluster
+      
+      job_clusters:
+        - job_cluster_key: cleanup_cluster
+          new_cluster:
+            spark_version: 13.3.x-scala2.12
+            node_type_id: i3.xlarge
+            num_workers: 1
+      
+      email_notifications:
+        on_failure:
+          - vasuambi@gmail.com
+        on_success:
+          - vasuambi@gmail.com
+      
+      max_concurrent_runs: 1
+      timeout_seconds: 7200  # 2 hours
+
+# Variables that can be overridden per environment
+variables:
+  catalog:
+    description: Unity Catalog name
+    default: workspace
+  
+  schema:
+    description: Schema name for tables
+    default: hive_video_analytics
+  
+  pipeline_name:
+    description: Pipeline display name
+    default: video_telemetry_qos_pipeline
+  
+  prod_service_principal:
+    description: Service principal for production deployments
+    default: ""
